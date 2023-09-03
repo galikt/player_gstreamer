@@ -1,0 +1,13 @@
+BasedOnStyle: Microsoft
+AlignAfterOpenBracket: DontAlign
+AlignEscapedNewlines: Right
+ColumnLimit: '0'
+IndentWidth: '2'
+Language: Cpp
+NamespaceIndentation: All
+PointerAlignment: Left
+SortIncludes: 'false'
+SpaceAfterTemplateKeyword: 'true'
+Standard: Auto
+TabWidth: '2'
+UseTab: Never
