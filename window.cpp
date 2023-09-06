@@ -3,28 +3,32 @@
 
 PWindow::PWindow()
 {
+  OutputFile = get_current_dir_name();
+  OutputFile += "/Output.mkv";
+
   add(MainBox);
   CreateMainMenu(MainBox);
 
+  DrawingArea.set_size_request(640, 360);
   MainBox.pack_start(DrawingArea, Gtk::PACK_EXPAND_WIDGET);
   DrawingArea.signal_realize().connect(sigc::mem_fun(*this, &PWindow::OnDrawingAreaRealize));
 
   CreateControl(MainBox);
 
   InitBin();
-
   ChangeState(PState::NotRedy);
 
   show_all_children();
 
-  OutputFile = get_current_dir_name();
-  OutputFile += "/Output.mp4";
+  //!
+  //ChangeState(PState::Play);
+  //!
 }
 
 PWindow::~PWindow()
 {
-  Playbin->get_bus()->remove_watch(WatchId);
-  Playbin->set_state(Gst::STATE_NULL);
+  CustomBin->set_state(Gst::STATE_NULL);
+  CustomBin->get_bus()->remove_watch(WatchId);
 }
 
 void PWindow::CreateMainMenu(Gtk::Box& box)
@@ -83,40 +87,12 @@ void PWindow::CreateControl(Gtk::Box& box)
 
 void PWindow::InitBin()
 {
-  auto link = [](const Glib::RefPtr<Gst::Tee>& tee, const Glib::RefPtr<Gst::Element>& element) {
-    auto pad_src = tee->get_request_pad("src_%u");
-    auto pad_sink = element->get_static_pad("sink");
-    pad_sink->set_active(true);
-
-    pad_src->link(pad_sink);
-  };
-
-  TeeVideo = Gst::Tee::create("TeeVideo");
-  TeeAudio = Gst::Tee::create("TeeAudio");
-  Video = Gst::XvImageSink::create("VideoSink");
-  Audio = Gst::ElementFactory::create_element("autoaudiosink", "AudioSink");
-  FileSink = Gst::FileSink::create("FileSink");
-
-  Queue1 = Gst::Queue::create("Queue1");
-  Queue1->link(Video);
-
-  Queue2 = Gst::Queue::create("Queue2");
-  Queue2->link(Audio);
-
-  link(TeeVideo, Queue1);
-  link(TeeAudio, Queue2);
-
-  Playbin = Gst::PlayBin::create("PlayBin");
-  Playbin->add(Queue1);
-  Playbin->add(Queue2);
-  Playbin->add(Video);
-  Playbin->add(Audio);
-  // Playbin->add(FileSink);
-
-  Playbin->property_video_sink() = TeeVideo;
-  Playbin->property_audio_sink() = TeeAudio;
-
-  auto bus = Playbin->get_bus();
+  CustomBin = PCustomBin::create("CustomBin");
+  CustomBin->PropertyFileSink() = OutputFile;
+  //!
+  //CustomBin->PropertyFileSrc() = "/home/user/Downloads/1.mkv";
+  //!
+  auto bus = CustomBin->get_bus();
   bus->enable_sync_message_emission();
   bus->signal_sync_message().connect(sigc::mem_fun(*this, &PWindow::OnBusMessageSync));
 
@@ -137,7 +113,7 @@ void PWindow::OnOpenFile()
   case (Gtk::RESPONSE_OK): {
     ChangeState(PState::NotRedy);
 
-    Playbin->set_property("uri", dialog.get_uri());
+    CustomBin->PropertyFileSrc() = dialog.get_filename();
     set_title(Glib::filename_display_basename(dialog.get_filename()));
 
     ChangeState(PState::Play);
@@ -160,7 +136,7 @@ void PWindow::OnOutputFile()
   case (Gtk::RESPONSE_OK): {
     ChangeState(PState::Pause);
 
-    FileSink->property_location() = dialog.get_uri();
+    CustomBin->PropertyFileSink() = dialog.get_uri();
 
     ChangeState(PState::Play);
     break;
@@ -199,7 +175,7 @@ bool PWindow::OnTimeout()
 {
   if (NewPos > 0.0)
   {
-    Playbin->seek(Gst::FORMAT_TIME, Gst::SEEK_FLAG_FLUSH, NewPos);
+    CustomBin->seek(Gst::FORMAT_TIME, Gst::SEEK_FLAG_FLUSH, NewPos);
     NewPos = -1;
   }
   else
@@ -207,7 +183,7 @@ bool PWindow::OnTimeout()
     Gst::Format format_time = Gst::FORMAT_TIME;
     gint64 pos = 0;
 
-    if (Playbin->query_position(format_time, pos) && Playbin->query_duration(format_time, Duration))
+    if (CustomBin->query_position(format_time, pos) && CustomBin->query_duration(format_time, Duration))
     {
       double coff = 100.0 / (double)Duration;
       Scroll.set_value((double)pos * coff);
@@ -237,7 +213,7 @@ void PWindow::ChangeState(PState state)
     StopButton.set_sensitive(false);
     Scroll.set_value(0.0);
     Scroll.set_sensitive(false);
-    Playbin->set_state(Gst::STATE_NULL);
+    CustomBin->set_state(Gst::STATE_NULL);
     break;
   }
   case PState::Redy: {
@@ -246,7 +222,7 @@ void PWindow::ChangeState(PState state)
     StopButton.set_sensitive(false);
     Scroll.set_value(0.0);
     Scroll.set_sensitive(false);
-    Playbin->set_state(Gst::STATE_READY);
+    CustomBin->set_state(Gst::STATE_READY);
     break;
   }
   case PState::Play: {
@@ -254,14 +230,14 @@ void PWindow::ChangeState(PState state)
     StopButton.set_sensitive(true);
     Scroll.set_sensitive(true);
 
-    Playbin->set_state(Gst::STATE_PLAYING);
+    CustomBin->set_state(Gst::STATE_PLAYING);
 
     TimerUpdateControl = Glib::signal_timeout().connect(sigc::mem_fun(*this, &PWindow::OnTimeout), 500);
     break;
   }
   case PState::Pause: {
     PlayButton.set_image_from_icon_name("media-playback-start", static_cast<Gtk::IconSize>(GTK_ICON_SIZE_SMALL_TOOLBAR));
-    Playbin->set_state(Gst::STATE_PAUSED);
+    CustomBin->set_state(Gst::STATE_PAUSED);
 
     TimerUpdateControl.disconnect();
     break;

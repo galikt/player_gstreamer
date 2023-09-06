@@ -3,28 +3,67 @@
 PCustomBin::PCustomBin(const Glib::ustring& name)
     : Gst::Pipeline(name)
 {
-  Tee = Gst::Tee::create("Tee");
-  Video = Gst::XvImageSink::create("ImageSink");
+  FileSrc = Gst::FileSrc::create("FileSrc");
+  DecodeBin = Gst::DecodeBin::create("DecodeBin");
+
+  AudioConvert = Gst::AudioConvert::create("AudioConvert");
+  AudioSink = Gst::ElementFactory::create_element("autoaudiosink", "AudioSink");
+
+  VideoConvert = Gst::VideoConvert::create("VideoConvert");
+  VideoSink = Gst::XvImageSink::create("VideoSink");
+
+  Encoder = Gst::ElementFactory::create_element("x264enc", "Encoder");;
+  Mux = Gst::ElementFactory::create_element("matroskamux", "Mux");
+
   FileSink = Gst::FileSink::create("FileSink");
 
+  // Tee = Gst::Tee::create("Tee");
+  // GhostPad = Gst::GhostPad::create(DecodeBin->get_static_pad("sink"), "sink");
+  // add_pad(GhostPad);
 
-  add(Tee);
-  add(Video);
+  add(FileSrc);
+  add(DecodeBin);
+
+  add(AudioConvert);
+  add(AudioSink);
+
+  add(VideoConvert);
+  add(VideoSink);
+
+  // add(Encoder);
+  // add(Mux);
+
   // add(FileSink);
 
-  GhostPad = Gst::GhostPad::create(Tee->get_static_pad("sink"), "sink");
-  add_pad(GhostPad);
+  FileSrc->link(DecodeBin);
 
-  auto tee_video_pad = Tee->get_request_pad("src_%u");
-  auto video_pad = Video->get_static_pad("sink");
-  tee_video_pad->link(video_pad);
+  AudioConvert->link(AudioSink);
+  VideoConvert->link(VideoSink);
 
-  auto tee_file_pad = Tee->get_request_pad("src_%u");
-  auto file_pad = FileSink->get_static_pad("sink");
-  tee_file_pad->link(file_pad);
+  // Encoder->link(Mux);
+  // AudioConvert->link(Mux);
+
+  DecodeBin->signal_pad_added().connect(sigc::mem_fun(*this, &PCustomBin::OnDecodePadAdd));
 }
 
 Glib::RefPtr<PCustomBin> PCustomBin::create(const Glib::ustring& name)
 {
   return Glib::RefPtr<PCustomBin>(new PCustomBin(name));
+}
+
+Glib::PropertyProxy<Glib::ustring> PCustomBin::PropertyFileSrc()
+{
+  return FileSrc->property_location();
+}
+
+Glib::PropertyProxy<Glib::ustring> PCustomBin::PropertyFileSink()
+{
+  return FileSink->property_location();
+}
+
+void PCustomBin::OnDecodePadAdd(const Glib::RefPtr<Gst::Pad>& new_pad)
+{
+  new_pad->link(VideoConvert->get_static_pad("sink"));
+  new_pad->link(AudioConvert->get_static_pad("sink"));
+  // new_pad->link(Encoder->get_static_pad("sink"));
 }

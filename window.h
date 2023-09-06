@@ -28,8 +28,7 @@ protected:
   Gtk::HScale Scroll;
   std::string CurrentFile;
 
-  Glib::RefPtr<Gst::PlayBin> Playbin;
-  // Glib::RefPtr<PCustomBin> CustomBin;
+  Glib::RefPtr<PCustomBin> CustomBin;
 
   gint64 Duration{ 0 };
   gint64 NewPos { -1 };
@@ -40,15 +39,6 @@ protected:
   sigc::connection TimerUpdateControl;
 
   Glib::ustring OutputFile;
-
-  Glib::RefPtr<Gst::Tee> TeeVideo;
-  Glib::RefPtr<Gst::Tee> TeeAudio;
-  Glib::RefPtr<Gst::XvImageSink> Video;
-  Glib::RefPtr<Gst::Element> Audio;
-  Glib::RefPtr<Gst::FileSink> FileSink;
-
-  Glib::RefPtr<Gst::Queue> Queue1;
-  Glib::RefPtr<Gst::Queue> Queue2;
 
 public:
   PWindow();
