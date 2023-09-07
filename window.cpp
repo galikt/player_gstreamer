@@ -21,7 +21,7 @@ PWindow::PWindow()
   show_all_children();
 
   //!
-  //ChangeState(PState::Play);
+  // ChangeState(PState::Play);
   //!
 }
 
@@ -90,7 +90,7 @@ void PWindow::InitBin()
   CustomBin = PCustomBin::create("CustomBin");
   CustomBin->PropertyFileSink() = OutputFile;
   //!
-  //CustomBin->PropertyFileSrc() = "/home/user/Downloads/1.mkv";
+  // CustomBin->PropertyFileSrc() = "/home/user/Downloads/1.mkv";
   //!
   auto bus = CustomBin->get_bus();
   bus->enable_sync_message_emission();

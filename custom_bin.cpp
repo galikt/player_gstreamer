@@ -1,49 +1,79 @@
 #include "custom_bin.h"
+#include <regex>
+#include <string>
+
+const std::string REGEX_TYPE{"(^\\w*)\\/"};
 
 PCustomBin::PCustomBin(const Glib::ustring& name)
     : Gst::Pipeline(name)
 {
-  FileSrc = Gst::FileSrc::create("FileSrc");
-  DecodeBin = Gst::DecodeBin::create("DecodeBin");
+  auto link_element = [](const Glib::RefPtr<Gst::Element>& tee, const Glib::RefPtr<Gst::Element>& element) -> auto {
+    auto pad_src = tee->get_request_pad("src_%u");
+    auto pad_sink = element->get_static_pad("sink");
+    pad_sink->set_active(true);
 
-  AudioConvert = Gst::AudioConvert::create("AudioConvert");
-  AudioSink = Gst::ElementFactory::create_element("autoaudiosink", "AudioSink");
+    return pad_src->link(pad_sink);
+  };
 
-  VideoConvert = Gst::VideoConvert::create("VideoConvert");
-  VideoSink = Gst::XvImageSink::create("VideoSink");
-
-  Encoder = Gst::ElementFactory::create_element("x264enc", "Encoder");;
-  Mux = Gst::ElementFactory::create_element("matroskamux", "Mux");
-
-  FileSink = Gst::FileSink::create("FileSink");
-
-  // Tee = Gst::Tee::create("Tee");
-  // GhostPad = Gst::GhostPad::create(DecodeBin->get_static_pad("sink"), "sink");
-  // add_pad(GhostPad);
-
+  FileSrc = Gst::FileSrc::create();
   add(FileSrc);
-  add(DecodeBin);
+  auto decode_bin = Gst::DecodeBin::create();
+  decode_bin->signal_pad_added().connect(sigc::mem_fun(*this, &PCustomBin::OnDecodePadAdd));
+  add(decode_bin);
+  TeeVideo = Gst::Tee::create();
+  add(TeeVideo);
+  TeeAudio = Gst::Tee::create();
+  add(TeeAudio);
 
-  add(AudioConvert);
-  add(AudioSink);
+  auto qv_screen = Gst::Queue::create();
+  add(qv_screen);
+  auto qa_screen = Gst::Queue::create();
+  add(qa_screen);
+  auto qv_file = Gst::Queue::create();
+  add(qv_file);
+  auto qa_file = Gst::Queue::create();
+  add(qa_file);
 
+  VideoConvert = Gst::VideoConvert::create();
   add(VideoConvert);
-  add(VideoSink);
+  auto video_sink = Gst::XvImageSink::create();
+  add(video_sink);
 
-  // add(Encoder);
-  // add(Mux);
+  AudioConvert = Gst::AudioConvert::create();
+  add(AudioConvert);
+  auto audio_sink = Gst::ElementFactory::create_element("autoaudiosink");
+  add(audio_sink);
 
-  // add(FileSink);
+  FileSink = Gst::FileSink::create();
+  add(FileSink);
+  auto mux = Gst::ElementFactory::create_element("matroskamux");
+  add(mux);
+  auto encoder_video = Gst::ElementFactory::create_element("theoraenc");
+  add(encoder_video);
+  auto encoder_audio = Gst::ElementFactory::create_element("avenc_eac3");
+  add(encoder_audio);
 
-  FileSrc->link(DecodeBin);
+  // воспроизведение
+  FileSrc->link(decode_bin);
 
-  AudioConvert->link(AudioSink);
-  VideoConvert->link(VideoSink);
+  link_element(TeeVideo, qv_screen);
+  qv_screen->link(VideoConvert);
+  VideoConvert->link(video_sink);
 
-  // Encoder->link(Mux);
-  // AudioConvert->link(Mux);
+  link_element(TeeAudio, qa_screen);
+  qa_screen->link(AudioConvert);
+  AudioConvert->link(audio_sink);
 
-  DecodeBin->signal_pad_added().connect(sigc::mem_fun(*this, &PCustomBin::OnDecodePadAdd));
+  // запись в файл
+  link_element(TeeVideo, qv_file);
+  qv_file->link(encoder_video);
+  encoder_video->link(mux);
+
+  link_element(TeeAudio, qa_file);
+  qa_file->link(encoder_audio);
+  encoder_audio->link(mux);
+
+  mux->link(FileSink);
 }
 
 Glib::RefPtr<PCustomBin> PCustomBin::create(const Glib::ustring& name)
@@ -61,9 +91,20 @@ Glib::PropertyProxy<Glib::ustring> PCustomBin::PropertyFileSink()
   return FileSink->property_location();
 }
 
-void PCustomBin::OnDecodePadAdd(const Glib::RefPtr<Gst::Pad>& new_pad)
+void PCustomBin::OnDecodePadAdd(const Glib::RefPtr<Gst::Pad>& pad)
 {
-  new_pad->link(VideoConvert->get_static_pad("sink"));
-  new_pad->link(AudioConvert->get_static_pad("sink"));
-  // new_pad->link(Encoder->get_static_pad("sink"));
+  std::regex regex(REGEX_TYPE);
+  std::smatch match;
+
+  std::string format = pad->get_current_caps()->to_string().c_str();
+  regex_search(format, match, regex);
+
+  if (match[1] == "video")
+  {
+    pad->link(TeeVideo->get_static_pad("sink"));
+  }
+  else if (match[1] == "audio")
+  {
+    pad->link(TeeAudio->get_static_pad("sink"));
+  }
 }
