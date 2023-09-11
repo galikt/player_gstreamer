@@ -3,6 +3,19 @@
 
 PWindow::PWindow()
 {
+  std::list<PStateNode> state_graph{
+      {PState::NONE, {PState::NOT_INIT}},
+      {PState::NOT_INIT, {PState::NOT_READY}},
+      {PState::NOT_READY, {PState::READY, PState::NOT_INIT}},
+      {PState::READY, {PState::PLAY, PState::PAUSE, PState::NOT_READY}},
+      {PState::PLAY, {PState::PAUSE, PState::READY, PState::NOT_READY}},
+      {PState::PAUSE, {PState::PLAY, PState::READY, PState::NOT_READY}},
+  };
+  for (auto& node : state_graph)
+  {
+    StateGraph.insert(std::make_pair(node.State, node));
+  }
+
   OutputFile = get_current_dir_name();
   OutputFile += "/Output.mkv";
 
@@ -15,20 +28,14 @@ PWindow::PWindow()
 
   CreateControl(MainBox);
 
-  InitBin();
-  ChangeState(PState::NotRedy);
-
   show_all_children();
 
-  //!
-  // ChangeState(PState::Play);
-  //!
+  SetState(PState::NOT_INIT);
 }
 
 PWindow::~PWindow()
 {
-  CustomBin->set_state(Gst::STATE_NULL);
-  CustomBin->get_bus()->remove_watch(WatchId);
+  DeinitBin();
 }
 
 void PWindow::CreateMainMenu(Gtk::Box& box)
@@ -89,15 +96,22 @@ void PWindow::InitBin()
 {
   CustomBin = PCustomBin::create("CustomBin");
   CustomBin->PropertyFileSink() = OutputFile;
-  //!
-  // CustomBin->PropertyFileSrc() = "/home/user/Downloads/1.mkv";
-  //!
   auto bus = CustomBin->get_bus();
   bus->enable_sync_message_emission();
   bus->signal_sync_message().connect(sigc::mem_fun(*this, &PWindow::OnBusMessageSync));
 
   WatchId = bus->add_watch(sigc::mem_fun(*this, &PWindow::OnBusMessage));
   // Playbin->signal_video_changed().connect(sigc::mem_fun(*this, &PWindow::OnVideoChange));
+}
+
+void PWindow::DeinitBin()
+{
+  if (CustomBin)
+  {
+    CustomBin->set_state(Gst::STATE_NULL);
+    CustomBin->get_bus()->remove_watch(WatchId);
+    CustomBin.clear();
+  }
 }
 
 void PWindow::OnOpenFile()
@@ -107,16 +121,25 @@ void PWindow::OnOpenFile()
   dialog.add_button("Cancel", Gtk::RESPONSE_CANCEL);
   dialog.add_button("Open", Gtk::RESPONSE_OK);
 
+  auto filter = Gtk::FileFilter::create();
+  filter->set_name("Video");
+  filter->add_pattern("*.mkv");
+  filter->add_pattern("*.avi");
+  filter->add_pattern("*.mp4");
+  filter->add_pattern("*.wmv");
+  filter->add_pattern("*.mov");
+  dialog.add_filter(filter);
+
   int result = dialog.run();
   switch (result)
   {
   case (Gtk::RESPONSE_OK): {
-    ChangeState(PState::NotRedy);
+    SetState(PState::NOT_INIT);
 
-    CustomBin->PropertyFileSrc() = dialog.get_filename();
-    set_title(Glib::filename_display_basename(dialog.get_filename()));
+    InputFile = dialog.get_filename();
+    set_title(Glib::filename_display_basename(InputFile));
 
-    ChangeState(PState::Play);
+    SetState(PState::PLAY);
     break;
   }
   }
@@ -128,17 +151,22 @@ void PWindow::OnOutputFile()
   dialog.set_transient_for(*this);
   dialog.add_button("Cancel", Gtk::RESPONSE_CANCEL);
   dialog.add_button("Save", Gtk::RESPONSE_OK);
-  dialog.set_uri(OutputFile);
+  dialog.set_filename(OutputFile);
+
+  auto filter = Gtk::FileFilter::create();
+  filter->set_name("Video *.mkv");
+  filter->add_pattern("*.mkv");
+  dialog.add_filter(filter);
 
   int result = dialog.run();
   switch (result)
   {
   case (Gtk::RESPONSE_OK): {
-    ChangeState(PState::Pause);
+    SetState(PState::NOT_INIT);
 
-    CustomBin->PropertyFileSink() = dialog.get_uri();
+    OutputFile = dialog.get_uri();
 
-    ChangeState(PState::Play);
+    SetState(PState::PLAY);
     break;
   }
   }
@@ -151,12 +179,12 @@ void PWindow::OnQuit()
 
 void PWindow::OnButtonPlay()
 {
-  ChangeState(State == PState::Play ? PState::Pause : PState::Play);
+  SetState(State == PState::PLAY ? PState::PAUSE : PState::PLAY);
 }
 
 void PWindow::OnButtonStop()
 {
-  ChangeState(PState::Redy);
+  SetState(PState::READY);
 }
 
 bool PWindow::OnScrollChange(Gtk::ScrollType type, double value)
@@ -173,6 +201,12 @@ void PWindow::OnDrawingAreaRealize()
 
 bool PWindow::OnTimeout()
 {
+  if (!CustomBin || (State != PState::PLAY))
+  {
+    TimerUpdateControl.disconnect();
+    return true;
+  }
+
   if (NewPos > 0.0)
   {
     CustomBin->seek(Gst::FORMAT_TIME, Gst::SEEK_FLAG_FLUSH, NewPos);
@@ -193,58 +227,149 @@ bool PWindow::OnTimeout()
   return true;
 }
 
-void PWindow::ChangeState(PState state)
+void PWindow::SetState(PState new_state)
 {
-  if (State == state)
+  if (State == new_state)
   {
     return;
   }
 
-  if ((State == PState::NotRedy) && (state == PState::Play))
+  auto path = SearchPath(State, new_state);
+  for (auto& state : path)
   {
-    ChangeState(PState::Redy);
+    ChangeState(state);
+  }
+}
+
+void PWindow::ChangeState(PState new_state)
+{
+  if (State == new_state)
+  {
+    return;
   }
 
-  switch (state)
-  {
-  case PState::NotRedy: {
+  auto disable_sensitive_gui = [&]() {
     PlayButton.set_image_from_icon_name("media-playback-start", static_cast<Gtk::IconSize>(GTK_ICON_SIZE_SMALL_TOOLBAR));
     PlayButton.set_sensitive(false);
     StopButton.set_sensitive(false);
     Scroll.set_value(0.0);
     Scroll.set_sensitive(false);
+  };
+
+  switch (new_state)
+  {
+  case PState::NOT_INIT: {
+    DeinitBin();
+    disable_sensitive_gui();
+    break;
+  }
+  case PState::NOT_READY: {
+    if (!CustomBin)
+    {
+      InitBin();
+    }
+
+    disable_sensitive_gui();
+
+    CustomBin->PropertyFileSrc() = InputFile;
+    CustomBin->PropertyFileSink() = OutputFile;
+
     CustomBin->set_state(Gst::STATE_NULL);
     break;
   }
-  case PState::Redy: {
+  case PState::READY: {
     PlayButton.set_image_from_icon_name("media-playback-start", static_cast<Gtk::IconSize>(GTK_ICON_SIZE_SMALL_TOOLBAR));
     PlayButton.set_sensitive(true);
     StopButton.set_sensitive(false);
     Scroll.set_value(0.0);
     Scroll.set_sensitive(false);
+
     CustomBin->set_state(Gst::STATE_READY);
     break;
   }
-  case PState::Play: {
+  case PState::PAUSE: {
+    PlayButton.set_image_from_icon_name("media-playback-start", static_cast<Gtk::IconSize>(GTK_ICON_SIZE_SMALL_TOOLBAR));
+
+    CustomBin->set_state(Gst::STATE_PAUSED);
+    break;
+  }
+  case PState::PLAY: {
     PlayButton.set_image_from_icon_name("media-playback-pause", static_cast<Gtk::IconSize>(GTK_ICON_SIZE_SMALL_TOOLBAR));
     StopButton.set_sensitive(true);
     Scroll.set_sensitive(true);
+    TimerUpdateControl = Glib::signal_timeout().connect(sigc::mem_fun(*this, &PWindow::OnTimeout), 500);
 
     CustomBin->set_state(Gst::STATE_PLAYING);
-
-    TimerUpdateControl = Glib::signal_timeout().connect(sigc::mem_fun(*this, &PWindow::OnTimeout), 500);
-    break;
-  }
-  case PState::Pause: {
-    PlayButton.set_image_from_icon_name("media-playback-start", static_cast<Gtk::IconSize>(GTK_ICON_SIZE_SMALL_TOOLBAR));
-    CustomBin->set_state(Gst::STATE_PAUSED);
-
-    TimerUpdateControl.disconnect();
     break;
   }
   }
 
-  State = state;
+  State = new_state;
+}
+
+std::list<PWindow::PState> PWindow::SearchPath(PState begin, PState end, std::list<PWindow::PState> path)
+{
+  path.push_back(begin);
+
+  auto find = StateGraph.find(begin);
+  std::list<std::list<PWindow::PState>> paths;
+  for (auto& possible_state : find->second.Transition)
+  {
+    if (possible_state == end)
+    {
+      path.push_back(possible_state);
+      paths.push_back(path);
+      break;
+    }
+    else
+    {
+      bool enter = true;
+      for (auto& state : path)
+      {
+        if (state == possible_state)
+        {
+          enter = false;
+          break;
+        }
+      }
+
+      if (enter)
+      {
+        paths.push_back(SearchPath(possible_state, end, path));
+      }
+    }
+  }
+
+  auto iter_path = paths.begin();
+  if (iter_path == paths.end())
+  {
+    return std::list<PState>();
+  }
+
+  size_t min_size = iter_path->size();
+  for (auto iter = paths.begin(); iter != paths.end(); ++iter)
+  {
+    auto size = iter->size();
+
+    if (min_size > 0)
+    {
+      if (min_size > size)
+      {
+        min_size = size;
+        iter_path = iter;
+      }
+    }
+    else
+    {
+      if (min_size < size)
+      {
+        min_size = size;
+        iter_path = iter;
+      }
+    }
+  }
+
+  return *iter_path;
 }
 
 void PWindow::OnBusMessageSync(const Glib::RefPtr<Gst::Message>& message)
@@ -267,14 +392,19 @@ void PWindow::OnBusMessageSync(const Glib::RefPtr<Gst::Message>& message)
 
 bool PWindow::OnBusMessage(const Glib::RefPtr<Gst::Bus>&, const Glib::RefPtr<Gst::Message>& message)
 {
+  auto msg = message->get_message_type();
+
   switch (message->get_message_type())
   {
+  case Gst::MESSAGE_STATE_CHANGED: {
+    break;
+  }
   case Gst::MESSAGE_EOS: {
-    ChangeState(PState::Redy);
+    SetState(PState::NOT_INIT);
     break;
   }
   case Gst::MESSAGE_ERROR: {
-    ChangeState(PState::Redy);
+    SetState(PState::NOT_INIT);
     break;
   }
   }

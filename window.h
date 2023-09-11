@@ -5,19 +5,32 @@
 #include <gtkmm/window.h>
 #include <gstreamermm.h>
 #include <string>
+#include <list>
+#include <map>
 #include "custom_bin.h"
 
 class PWindow : public Gtk::Window
 {
-protected:
+public:
   enum PState
   {
-    None,
-    NotRedy,
-    Redy,
-    Play,
-    Pause
-  } State{PState::None};
+    NONE,
+    NOT_INIT,
+    NOT_READY,
+    READY,
+    PLAY,
+    PAUSE
+  };
+
+  struct PStateNode
+  {
+    PState State;
+    std::list<PState> Transition;
+  };
+
+protected:
+  PState State{PState::NONE};
+  std::map<PState, PStateNode> StateGraph;
 
   Gtk::Menu MainMenu;
   Gtk::VBox MainBox;
@@ -30,14 +43,15 @@ protected:
 
   Glib::RefPtr<PCustomBin> CustomBin;
 
-  gint64 Duration{ 0 };
-  gint64 NewPos { -1 };
+  gint64 Duration{0};
+  gint64 NewPos{-1};
 
   guint WatchId;
   guintptr DrawingAreaHandler;
   gulong PadId;
   sigc::connection TimerUpdateControl;
 
+  Glib::ustring InputFile;
   Glib::ustring OutputFile;
 
 public:
@@ -48,7 +62,10 @@ protected:
   void CreateMainMenu(Gtk::Box& box);
   void CreateControl(Gtk::Box& box);
   void InitBin();
-  void ChangeState(PState state);
+  void DeinitBin();
+  void SetState(PState new_state);
+  void ChangeState(PState new_state);
+  std::list<PWindow::PState> SearchPath(PState begin, PState end, std::list<PWindow::PState> path = std::list<PWindow::PState>());
 
   void OnOpenFile();
   void OnQuit();
@@ -60,8 +77,8 @@ protected:
   bool OnTimeout();
   void OnBusMessageSync(const Glib::RefPtr<Gst::Message>& message);
   bool OnBusMessage(const Glib::RefPtr<Gst::Bus>&, const Glib::RefPtr<Gst::Message>& message);
-  //Gst::PadProbeReturn OnPadBuffer(const Glib::RefPtr<Gst::Pad>& pad, const Gst::PadProbeInfo& data);
-  // void OnVideoChange();
+  // Gst::PadProbeReturn OnPadBuffer(const Glib::RefPtr<Gst::Pad>& pad, const Gst::PadProbeInfo& data);
+  //  void OnVideoChange();
 };
 
 #endif
